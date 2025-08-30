@@ -2,8 +2,6 @@ import React, { useState, useEffect, createContext, useContext } from 'react';
 import { BrowserRouter as Router, Routes, Route, Link, useParams } from 'react-router-dom';
 
 // --- Configuration ---
-// This function safely gets the API URL. It uses the Vercel environment variable when deployed
-// and falls back to your local server address for local development. This resolves the build warning.
 const getApiBaseUrl = () => {
   if (typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.VITE_API_URL) {
     return import.meta.env.VITE_API_URL;
@@ -11,7 +9,6 @@ const getApiBaseUrl = () => {
   return 'http://127.0.0.1:8000';
 };
 const API_BASE_URL = getApiBaseUrl();
-
 
 // --- Type Definitions ---
 interface Anime {
@@ -27,9 +24,9 @@ interface Recommendation extends Anime {
   similarity_score: number;
 }
 
-
 // --- Watched List Context for Global State ---
 interface WatchedListContextType {
+  userId: string;
   watchedIds: Set<number>;
   addWatchedId: (id: number) => void;
   isLoading: boolean;
@@ -46,8 +43,18 @@ const useWatchedList = () => {
 const WatchedListProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [watchedIds, setWatchedIds] = useState<Set<number>>(new Set());
   const [isLoading, setIsLoading] = useState(true);
-  const userId = 'user123'; // Hardcoded for this version
 
+  // Generate or load unique userId for each browser
+  const [userId] = useState<string>(() => {
+    let existing = localStorage.getItem("anisugg_user_id");
+    if (!existing) {
+      existing = `user_${crypto.randomUUID()}`;
+      localStorage.setItem("anisugg_user_id", existing);
+    }
+    return existing;
+  });
+
+  // Fetch watched list from backend
   useEffect(() => {
     const fetchWatchedList = async () => {
       try {
@@ -62,19 +69,18 @@ const WatchedListProvider: React.FC<{ children: React.ReactNode }> = ({ children
       }
     };
     fetchWatchedList();
-  }, []);
+  }, [userId]);
 
   const addWatchedId = (id: number) => {
     setWatchedIds(prev => new Set(prev).add(id));
   };
 
   return (
-    <WatchedListContext.Provider value={{ watchedIds, addWatchedId, isLoading }}>
+    <WatchedListContext.Provider value={{ userId, watchedIds, addWatchedId, isLoading }}>
       {children}
     </WatchedListContext.Provider>
   );
 };
-
 
 // --- Main App Component ---
 function App() {
@@ -91,7 +97,6 @@ function App() {
     </WatchedListProvider>
   );
 }
-
 
 // --- Page Components ---
 const HomePage: React.FC = () => {
@@ -160,8 +165,7 @@ const DetailPage: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  const { watchedIds, addWatchedId } = useWatchedList();
-  const userId = 'user123';
+  const { userId, watchedIds, addWatchedId } = useWatchedList();
   const isAlreadySaved = id ? watchedIds.has(Number(id)) : false;
 
   const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved'>(
@@ -171,7 +175,6 @@ const DetailPage: React.FC = () => {
   useEffect(() => {
     setSaveStatus(isAlreadySaved ? 'saved' : 'idle');
   }, [isAlreadySaved]);
-
 
   useEffect(() => {
     setLoading(true);
@@ -280,14 +283,12 @@ const DetailPage: React.FC = () => {
   );
 };
 
-
 // --- Reusable Components ---
 const RecommendationCarousel: React.FC = () => {
   const [profileRecs, setProfileRecs] = useState<Recommendation[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const { watchedIds, isLoading: isWatchedListLoading } = useWatchedList();
-  const userId = 'user123';
+  const { userId, watchedIds, isLoading: isWatchedListLoading } = useWatchedList();
 
   useEffect(() => {
     if (isWatchedListLoading) return;
@@ -318,7 +319,7 @@ const RecommendationCarousel: React.FC = () => {
       }
     };
     fetchProfileRecs();
-  }, [watchedIds, isWatchedListLoading]);
+  }, [watchedIds, isWatchedListLoading, userId]);
 
   if (loading || isWatchedListLoading) {
     return <p>Loading your personalized recommendations...</p>;
@@ -386,7 +387,6 @@ const AnimeCard: React.FC<{ anime: Anime | Recommendation }> = ({ anime }) => {
   );
 };
 
-
 // --- Styles ---
 const style = document.createElement('style');
 style.textContent = `
@@ -398,4 +398,3 @@ style.textContent = `
 document.head.appendChild(style);
 
 export default App;
-
