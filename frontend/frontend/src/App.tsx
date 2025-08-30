@@ -37,7 +37,7 @@ const WatchedListProvider: React.FC<{ children: React.ReactNode }> = ({ children
   useEffect(() => {
     const fetchWatchedList = async () => {
       try {
-        const response = await fetch(`http://127.0.0.1:8000/user/watched/${userId}`);
+        const response = await fetch(`import.meta.env.VITE_API_URL/user/watched/${userId}`);
         if (!response.ok) throw new Error("Could not fetch watched list.");
         const data: number[] = await response.json();
         setWatchedIds(new Set(data));
@@ -91,7 +91,7 @@ const HomePage: React.FC = () => {
   useEffect(() => {
     const fetchAllAnime = async () => {
       try {
-        const response = await fetch('http://127.0.0.1:8000/anime');
+        const response = await fetch('import.meta.env.VITE_API_URL/anime');
         if (!response.ok) throw new Error('Network response was not ok');
         const data: Anime[] = await response.json();
         setAnimeList(data);
@@ -153,7 +153,7 @@ const DetailPage: React.FC = () => {
     setLoading(true);
     const fetchRecommendations = async () => {
       try {
-        const response = await fetch(`http://127.0.0.1:8000/recommend/${id}?user_id=${userId}`);
+        const response = await fetch(`import.meta.env.VITE_API_URL/recommend/${id}?user_id=${userId}`);
         if (!response.ok) throw new Error(`Error: ${response.statusText}`);
         const data: Recommendation[] = await response.json();
         setRecommendations(data);
@@ -171,7 +171,7 @@ const DetailPage: React.FC = () => {
   const handleAddToWatched = async () => {
     if (!id) return;
     try {
-      const response = await fetch('http://127.0.0.1:8000/user/watched', {
+      const response = await fetch('import.meta.env.VITE_API_URL/user/watched', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ user_id: userId, anime_id: Number(id) }),
@@ -239,7 +239,7 @@ const RecommendationCarousel: React.FC = () => {
         return;
       }
       try {
-        const response = await fetch(`http://127.0.0.1:8000/profile/recommend/${userId}`);
+        const response = await fetch(`import.meta.env.VITE_API_URL/profile/recommend/${userId}`);
         if (response.status === 404) {
           setError("Add more anime to your watched list to improve personalized recommendations!");
           setProfileRecs([]);

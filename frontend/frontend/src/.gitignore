@@ -1,0 +1,27 @@
+Python / Backend Specific
+Ignore the virtual environment folder
+/backend/.venv
+
+Ignore Python cache files
+/backend/pycache/
+
+Node.js / Frontend Specific
+Ignore the massive node_modules folder
+/frontend/node_modules
+
+Ignore the build output directory
+/frontend/dist
+
+Ignore local environment variables (important for security)
+/frontend/.env*.local
+
+IDE and OS Specific
+Ignore VSCode editor settings
+.vscode/
+
+Ignore macOS specific files
+.DS_Store
+
+Ignore temporary files from some editors
+*~
+*.swp
