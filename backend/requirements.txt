@@ -1,8 +1,9 @@
 fastapi
-uvicorn[standard]
+uvicorn
 pandas
 numpy
 scikit-learn
 sentence-transformers
-torch
 pymongo
+torch
+requests

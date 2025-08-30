@@ -1,0 +1,15 @@
+Ignore virtual environment files
+.venv
+venv
+pycache/
+
+Ignore IDE and OS-specific files
+.vscode/
+.idea/
+*.pyc
+*.pyo
+*.pyd
+.DS_Store
+
+Ignore local data files that should not be in the image
+/data
