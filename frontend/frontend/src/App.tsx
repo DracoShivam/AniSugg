@@ -1,20 +1,34 @@
 import React, { useState, useEffect, createContext, useContext } from 'react';
-import { BrowserRouter as Router, Routes, Route, Link, useParams, useLocation } from 'react-router-dom';
+import { BrowserRouter as Router, Routes, Route, Link, useParams } from 'react-router-dom';
 
-// --- Type Definitions (Updated for clarity) ---
+// --- Configuration ---
+// This function safely gets the API URL. It uses the Vercel environment variable when deployed
+// and falls back to your local server address for local development. This resolves the build warning.
+const getApiBaseUrl = () => {
+  if (typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.VITE_API_URL) {
+    return import.meta.env.VITE_API_URL;
+  }
+  return 'http://127.0.0.1:8000';
+};
+const API_BASE_URL = getApiBaseUrl();
+
+
+// --- Type Definitions ---
 interface Anime {
   mal_id: number;
   title: string;
   image_url: string;
-  score: number; // This is the MAL Score
+  score: number;
   synopsis?: string;
+  genres?: string;
 }
 
 interface Recommendation extends Anime {
   similarity_score: number;
 }
 
-// --- Watched List Context for Global State Management ---
+
+// --- Watched List Context for Global State ---
 interface WatchedListContextType {
   watchedIds: Set<number>;
   addWatchedId: (id: number) => void;
@@ -32,12 +46,12 @@ const useWatchedList = () => {
 const WatchedListProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [watchedIds, setWatchedIds] = useState<Set<number>>(new Set());
   const [isLoading, setIsLoading] = useState(true);
-  const userId = 'user123';
+  const userId = 'user123'; // Hardcoded for this version
 
   useEffect(() => {
     const fetchWatchedList = async () => {
       try {
-        const response = await fetch(`import.meta.env.VITE_API_URL/user/watched/${userId}`);
+        const response = await fetch(`${API_BASE_URL}/user/watched/${userId}`);
         if (!response.ok) throw new Error("Could not fetch watched list.");
         const data: number[] = await response.json();
         setWatchedIds(new Set(data));
@@ -61,6 +75,7 @@ const WatchedListProvider: React.FC<{ children: React.ReactNode }> = ({ children
   );
 };
 
+
 // --- Main App Component ---
 function App() {
   return (
@@ -77,6 +92,7 @@ function App() {
   );
 }
 
+
 // --- Page Components ---
 const HomePage: React.FC = () => {
   const [animeList, setAnimeList] = useState<Anime[]>([]);
@@ -91,7 +107,7 @@ const HomePage: React.FC = () => {
   useEffect(() => {
     const fetchAllAnime = async () => {
       try {
-        const response = await fetch('import.meta.env.VITE_API_URL/anime');
+        const response = await fetch(`${API_BASE_URL}/anime`);
         if (!response.ok) throw new Error('Network response was not ok');
         const data: Anime[] = await response.json();
         setAnimeList(data);
@@ -139,81 +155,127 @@ const HomePage: React.FC = () => {
 
 const DetailPage: React.FC = () => {
   const { id } = useParams<{ id: string }>();
-  const location = useLocation();
-  const { title: animeTitle } = location.state as { title: string } || { title: 'Anime' };
+  const [animeDetails, setAnimeDetails] = useState<Anime | null>(null);
   const [recommendations, setRecommendations] = useState<Recommendation[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  
+
   const { watchedIds, addWatchedId } = useWatchedList();
   const userId = 'user123';
-  const isSaved = id ? watchedIds.has(Number(id)) : false;
+  const isAlreadySaved = id ? watchedIds.has(Number(id)) : false;
+
+  const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved'>(
+    isAlreadySaved ? 'saved' : 'idle'
+  );
+
+  useEffect(() => {
+    setSaveStatus(isAlreadySaved ? 'saved' : 'idle');
+  }, [isAlreadySaved]);
+
 
   useEffect(() => {
     setLoading(true);
-    const fetchRecommendations = async () => {
+    const fetchDetailsAndRecommendations = async () => {
+      if (!id) return;
       try {
-        const response = await fetch(`import.meta.env.VITE_API_URL/recommend/${id}?user_id=${userId}`);
-        if (!response.ok) throw new Error(`Error: ${response.statusText}`);
-        const data: Recommendation[] = await response.json();
-        setRecommendations(data);
+        const [detailsRes, recsRes] = await Promise.all([
+          fetch(`${API_BASE_URL}/anime/${id}`),
+          fetch(`${API_BASE_URL}/recommend/${id}?user_id=${userId}`)
+        ]);
+
+        if (!detailsRes.ok) throw new Error('Failed to fetch anime details.');
+        if (!recsRes.ok) throw new Error('Failed to fetch recommendations.');
+        
+        const detailsData = await detailsRes.json();
+        const recsData = await recsRes.json();
+        
+        setAnimeDetails(detailsData);
+        setRecommendations(recsData);
+
       } catch (err) {
         setError(err instanceof Error ? err.message : 'An unknown error occurred');
       } finally {
         setLoading(false);
       }
     };
-    if (id) {
-      fetchRecommendations();
-    }
+    fetchDetailsAndRecommendations();
   }, [id, userId]);
 
   const handleAddToWatched = async () => {
-    if (!id) return;
+    if (!id || saveStatus !== 'idle') return;
+    setSaveStatus('saving');
     try {
-      const response = await fetch('import.meta.env.VITE_API_URL/user/watched', {
+      const response = await fetch(`${API_BASE_URL}/user/watched`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ user_id: userId, anime_id: Number(id) }),
       });
       if (!response.ok) throw new Error('Failed to save.');
       addWatchedId(Number(id));
+      setSaveStatus('saved');
     } catch (err) {
       console.error("Failed to add to watched list:", err);
+      setSaveStatus('idle');
     }
   };
+  
+  if (loading) return <p className="text-center p-8">Loading details...</p>;
+  if (error) return <p className="text-center p-8 text-red-500">Error: {error}</p>;
+  if (!animeDetails) return <p className="text-center p-8">Anime not found.</p>;
 
   return (
     <div className="container mx-auto px-4 py-8">
-      <div className="flex justify-between items-center mb-8">
-        <h2 className="text-3xl font-bold">Recommendations based on "{animeTitle}"</h2>
-        <div className="flex items-center gap-4">
-          <Link 
-            to="/"
-            className="px-6 py-2 rounded-lg font-semibold bg-gray-700 hover:bg-gray-600 transition-colors"
-          >
-            &larr; Back to Home
-          </Link>
-          <button
-            onClick={handleAddToWatched}
-            disabled={isSaved}
-            className={`px-6 py-2 rounded-lg font-semibold transition-colors ${
-              isSaved ? 'bg-green-600 cursor-not-allowed' : 'bg-indigo-600 hover:bg-indigo-700'
-            }`}
-          >
-            {isSaved ? 'Saved!' : 'Add to Watched'}
-          </button>
+      <div className="flex flex-col md:flex-row gap-8 mb-12">
+        <img 
+          src={animeDetails.image_url} 
+          alt={animeDetails.title} 
+          className="w-full md:w-1/4 h-auto object-cover rounded-lg shadow-lg"
+          onError={(e) => {
+            const target = e.target as HTMLImageElement;
+            target.onerror = null; 
+            target.src = 'https://placehold.co/500x700/1f2937/7c3aed?text=No+Image';
+          }}
+        />
+        <div className="flex-1">
+          <div className="flex justify-between items-start">
+            <h1 className="text-4xl font-bold mb-4">{animeDetails.title}</h1>
+            <div className="flex items-center gap-4 flex-shrink-0">
+              <Link to="/" className="px-6 py-2 rounded-lg font-semibold bg-gray-700 hover:bg-gray-600 transition-colors">&larr; Back to Home</Link>
+              <button
+                onClick={handleAddToWatched}
+                disabled={saveStatus !== 'idle'}
+                className={`px-6 py-2 rounded-lg font-semibold transition-colors w-36 text-center ${
+                  saveStatus === 'saved' ? 'bg-green-600 cursor-not-allowed' :
+                  saveStatus === 'saving' ? 'bg-gray-500 cursor-wait' :
+                  'bg-indigo-600 hover:bg-indigo-700'
+                }`}
+              >
+                {saveStatus === 'saved' ? 'Saved!' :
+                 saveStatus === 'saving' ? 'Saving...' :
+                 'Add to Watched'}
+              </button>
+            </div>
+          </div>
+          <div className="flex items-center gap-4 mb-4">
+            <span className="text-yellow-400 font-bold text-lg">MAL Score: {animeDetails.score.toFixed(2)}</span>
+          </div>
+          <div className="flex flex-wrap gap-2 mb-4">
+            {animeDetails.genres?.split(',').map(genre => (
+              <span key={genre.trim()} className="bg-gray-700 text-gray-300 text-xs font-semibold px-3 py-1 rounded-full">{genre.trim()}</span>
+            ))}
+          </div>
+          <p className="text-gray-300 leading-relaxed">{animeDetails.synopsis}</p>
         </div>
       </div>
-      {loading && <p>Loading recommendations...</p>}
-      {error && <p className="text-red-500">Error: {error}</p>}
-      {!loading && !error && (
+      
+      <div>
+        <h2 className="text-3xl font-bold mb-6">Recommendations based on "{animeDetails.title}"</h2>
         <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-6">
           {recommendations.map(rec => (
             <AnimeCard key={rec.mal_id} anime={rec} />
           ))}
         </div>
-      )}
+      </div>
     </div>
   );
 };
@@ -239,7 +301,7 @@ const RecommendationCarousel: React.FC = () => {
         return;
       }
       try {
-        const response = await fetch(`import.meta.env.VITE_API_URL/profile/recommend/${userId}`);
+        const response = await fetch(`${API_BASE_URL}/profile/recommend/${userId}`);
         if (response.status === 404) {
           setError("Add more anime to your watched list to improve personalized recommendations!");
           setProfileRecs([]);
@@ -278,9 +340,7 @@ const RecommendationCarousel: React.FC = () => {
   );
 };
 
-// --- NEW, CORRECTED ANIME CARD COMPONENT ---
 const AnimeCard: React.FC<{ anime: Anime | Recommendation }> = ({ anime }) => {
-  // Type guard to check if the anime object is a Recommendation
   const isRecommendation = 'similarity_score' in anime;
 
   return (
@@ -296,7 +356,7 @@ const AnimeCard: React.FC<{ anime: Anime | Recommendation }> = ({ anime }) => {
           className="w-full h-72 object-cover transition-transform duration-300 group-hover:scale-105"
           onError={(e) => {
             const target = e.target as HTMLImageElement;
-            target.onerror = null; // Prevent infinite loop if placeholder fails
+            target.onerror = null; 
             target.src = 'https://placehold.co/500x700/1f2937/7c3aed?text=No+Image';
           }}
         />
@@ -307,7 +367,6 @@ const AnimeCard: React.FC<{ anime: Anime | Recommendation }> = ({ anime }) => {
           {anime.title}
         </h3>
       </div>
-      {/* This is the hover-over tooltip div */}
       <div className="absolute inset-0 p-4 bg-black/80 backdrop-blur-sm text-white opacity-0 group-hover:opacity-100 transition-opacity duration-300 overflow-y-auto rounded-lg">
         <h4 className="font-bold text-indigo-400 mb-2">{anime.title}</h4>
         
