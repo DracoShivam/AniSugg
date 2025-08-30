@@ -1,152 +1,176 @@
 # main.py
+# Import necessary libraries
 import os
 import pandas as pd
 import numpy as np
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Body
 from fastapi.middleware.cors import CORSMiddleware
 from pymongo import MongoClient
 from pydantic import BaseModel, Field
-from typing import List
+from typing import List, Optional
 from sklearn.metrics.pairwise import cosine_similarity
-from contextlib import asynccontextmanager
-
-# --- Data Loading ---
-# This dictionary will hold our data and model, loaded at startup
-ml_models = {}
-
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    # Load the ML model and data
-    print("--- Loading data and model ---")
-    try:
-        # Load the anime data
-        anime_df = pd.read_csv("data/anime_data.csv")
-        # Load embeddings and IDs
-        embeddings = np.load("data/anime_embeddings.npy")
-        anime_ids = np.load("data/anime_ids.npy")
-        
-        # Create a mapping from anime ID to its index in the embeddings array
-        id_to_index = {mal_id: i for i, mal_id in enumerate(anime_ids)}
-
-        # Store in our dictionary
-        ml_models["anime_df"] = anime_df
-        ml_models["embeddings"] = embeddings
-        ml_models["anime_ids"] = anime_ids
-        ml_models["id_to_index"] = id_to_index
-        print("Successfully loaded data and model.")
-    except FileNotFoundError:
-        print("ERROR: Data files not found. Please run scripts/process_data.py first.")
-        ml_models["anime_df"] = pd.DataFrame() # Avoid errors on startup
-    yield
-    # Clean up the ML models and data
-    ml_models.clear()
+import logging
 
 # --- Application Setup ---
+# Initialize the FastAPI application
 app = FastAPI(
     title="AI Anime Recommendation API",
     description="An API for providing AI-powered anime recommendations.",
-    version="1.0.0",
-    lifespan=lifespan # Use the new lifespan context manager
+    version="1.0.0"
 )
 
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
 # --- CORS Middleware ---
+origins = [
+    "http://localhost:5173",
+]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173"],
+    allow_origins=origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# --- Database Connection (Placeholder) ---
+# --- Database Connection ---
 MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017/")
 DB_NAME = "anime_recommendations"
 try:
-    client = MongoClient(MONGO_URI)
+    client = MongoClient(MONGO_URI, serverSelectionTimeoutMS=5000)
     db = client[DB_NAME]
-    # A simple check to confirm connection
-    client.server_info() 
-    print("Successfully connected to MongoDB.")
+    users_collection = db.users
+    client.server_info()
+    logger.info("Successfully connected to MongoDB.")
 except Exception as e:
-    print(f"Error connecting to MongoDB: {e}")
+    logger.error(f"Failed to connect to MongoDB: {e}")
     client = None
-    db = None
-
 
 # --- Pydantic Models ---
+class Anime(BaseModel):
+    mal_id: int
+    title: str
+    image_url: str
+    score: float
+    synopsis: Optional[str] = None
+
+# Explicit model for recommendations to avoid ambiguity
 class Recommendation(BaseModel):
     mal_id: int
     title: str
-    synopsis: str
-    genres: str
     image_url: str
-    similarity_score: float = Field(..., alias="score")
-    mal_score: float # The overall MyAnimeList score
+    score: float
+    synopsis: Optional[str] = None
+    similarity_score: float
 
-class AnimeInfo(BaseModel):
-    mal_id: int
-    title: str
-    synopsis: str | None = None
-    image_url: str | None = None
-    score: float | None = None
-
-
-# --- API Endpoints ---
-@app.get("/")
-def read_root():
-    return {"message": "Welcome to the AI Anime Recommendation API!"}
-
-@app.get("/recommend/{anime_id}", response_model=List[Recommendation])
-def get_recommendations_for_anime(anime_id: int, limit: int = 10):
-    if ml_models.get("anime_df") is None or ml_models["anime_df"].empty:
-        raise HTTPException(status_code=503, detail="Model and data not loaded.")
-
-    id_to_index = ml_models["id_to_index"]
-    if anime_id not in id_to_index:
-        raise HTTPException(status_code=404, detail="Anime ID not found.")
-
-    anime_idx = id_to_index[anime_id]
-    anime_vector = ml_models["embeddings"][anime_idx].reshape(1, -1)
-    
-    # Calculate similarity scores
-    similarity_scores = cosine_similarity(anime_vector, ml_models["embeddings"])[0]
-    
-    # Get top N similar anime indices, excluding the anime itself
-    similar_indices = similarity_scores.argsort()[-limit-1:-1][::-1]
-    
-    recommendations = []
-    for idx in similar_indices:
-        rec_id = ml_models["anime_ids"][idx]
-        anime_details = ml_models["anime_df"][ml_models["anime_df"]["mal_id"] == rec_id].iloc[0]
-        rec = {
-            "mal_id": int(rec_id),
-            "title": anime_details["title"],
-            "synopsis": anime_details["synopsis"],
-            "genres": anime_details["genres"],
-            "image_url": anime_details["image_url"],
-            "score": similarity_scores[idx],
-            "mal_score": anime_details.get("score", 0.0)
-        }
-        recommendations.append(rec)
-        
-    return recommendations
-
-@app.get("/anime", response_model=List[AnimeInfo])
-def get_all_anime():
-    """Returns a list of all anime for the homepage/search."""
-    if ml_models.get("anime_df") is None or ml_models["anime_df"].empty:
-        raise HTTPException(status_code=503, detail="Model and data not loaded.")
-    
-    # Convert dataframe to list of dictionaries for Pydantic validation
-    return ml_models["anime_df"].to_dict(orient="records")
-
-class WatchedItem(BaseModel):
+class WatchedAnime(BaseModel):
     user_id: str
     anime_id: int
 
+# --- Global Variables for AI Model ---
+anime_df = pd.DataFrame()
+anime_embeddings = np.array([])
+anime_ids = np.array([])
+id_to_index = {}
+
+# --- AI Model Loading ---
+@app.on_event("startup")
+def load_model_and_data():
+    global anime_df, anime_embeddings, anime_ids, id_to_index
+    logger.info("Loading AI model and data...")
+    try:
+        anime_df = pd.read_csv("data/anime_data.csv")
+        anime_embeddings = np.load("data/anime_embeddings.npy")
+        anime_ids = np.load("data/anime_ids.npy")
+        id_to_index = {mal_id: i for i, mal_id in enumerate(anime_ids)}
+        logger.info("Successfully loaded all data files.")
+    except FileNotFoundError as e:
+        logger.error(f"Data file not found: {e}. Please run scripts/process_data.py")
+
+# --- API Endpoints ---
+@app.get("/anime", response_model=List[Anime])
+def get_all_anime():
+    return anime_df.to_dict(orient="records")
+
+@app.get("/recommend/{anime_id}", response_model=List[Recommendation])
+def get_recommendations_for_anime(anime_id: int, user_id: str):
+    if anime_id not in id_to_index:
+        raise HTTPException(status_code=404, detail="Anime not found in the dataset.")
+
+    user_watched_list = users_collection.find_one({"user_id": user_id}, {"watched_list": 1})
+    watched_ids = set(user_watched_list.get("watched_list", [])) if user_watched_list else set()
+
+    idx = id_to_index[anime_id]
+    sim_scores = cosine_similarity([anime_embeddings[idx]], anime_embeddings)[0]
+    
+    similar_indices = sim_scores.argsort()[::-1][1:]
+    
+    recs = []
+    for i in similar_indices:
+        if len(recs) >= 10: break
+        rec_id = int(anime_ids[i])
+        if rec_id != anime_id and rec_id not in watched_ids:
+            anime_details = anime_df.iloc[i]
+            recs.append({
+                "mal_id": rec_id,
+                "title": anime_details["title"],
+                "image_url": anime_details["image_url"],
+                "synopsis": anime_details["synopsis"],
+                "score": anime_details["score"],
+                "similarity_score": sim_scores[i]
+            })
+    return recs
+
+@app.get("/profile/recommend/{user_id}", response_model=List[Recommendation])
+def get_recommendations_for_profile(user_id: str):
+    user_data = users_collection.find_one({"user_id": user_id})
+    if not user_data or not user_data.get("watched_list"):
+        raise HTTPException(status_code=404, detail="User has no watched anime.")
+    
+    watched_indices = [id_to_index[wid] for wid in user_data["watched_list"] if wid in id_to_index]
+    if not watched_indices:
+        raise HTTPException(status_code=404, detail="None of the user's watched anime are in the recommendation dataset.")
+
+    taste_profile_vector = np.mean(anime_embeddings[watched_indices], axis=0)
+    sim_scores = cosine_similarity([taste_profile_vector], anime_embeddings)[0]
+
+    similar_indices = sim_scores.argsort()[::-1]
+    
+    recs = []
+    for i in similar_indices:
+        if len(recs) >= 10: break
+        rec_id = int(anime_ids[i])
+        if rec_id not in user_data["watched_list"]:
+            anime_details = anime_df.iloc[i]
+            recs.append({
+                "mal_id": rec_id,
+                "title": anime_details["title"],
+                "image_url": anime_details["image_url"],
+                "synopsis": anime_details["synopsis"],
+                "score": anime_details["score"],
+                "similarity_score": sim_scores[i]
+            })
+    return recs
+    
 @app.post("/user/watched")
-def add_to_watched_list(item: WatchedItem):
-    # This is placeholder logic. In a real app, you would save this to MongoDB.
-    print(f"User {item.user_id} watched anime {item.anime_id}")
-    return {"status": "success", "user_id": item.user_id, "added_anime_id": item.anime_id}
+def add_to_watched_list(data: WatchedAnime):
+    try:
+        users_collection.update_one(
+            {"user_id": data.user_id},
+            {"$addToSet": {"watched_list": data.anime_id}},
+            upsert=True
+        )
+        return {"status": "success"}
+    except Exception as e:
+        logger.error(f"Database update failed: {e}")
+        raise HTTPException(status_code=500, detail="Could not update watched list.")
+
+@app.get("/user/watched/{user_id}", response_model=List[int])
+def get_watched_list(user_id: str):
+    user_data = users_collection.find_one({"user_id": user_id}, {"watched_list": 1})
+    if user_data:
+        return user_data.get("watched_list", [])
+    return []
 
