@@ -103,7 +103,7 @@ const HomePage: React.FC = () => {
   const [animeList, setAnimeList] = useState<Anime[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
   const [loading, setLoading] = useState(true);
-  const { watchedIds } = useWatchedList();
+  const { watchedIds, userId } = useWatchedList();
 
   const filteredAnime = animeList
     .filter(anime => anime.title.toLowerCase().includes(searchTerm.toLowerCase()))
@@ -125,12 +125,33 @@ const HomePage: React.FC = () => {
     fetchAllAnime();
   }, []);
 
+  // --- Reset profile & recommendations ---
+  const resetProfile = async () => {
+    try {
+      await fetch(`${API_BASE_URL}/user/reset/${userId}`, { method: "DELETE" });
+      localStorage.removeItem("anisugg_user_id");
+      window.location.reload();
+    } catch (error) {
+      console.error("Failed to reset profile:", error);
+    }
+  };
+
   return (
     <div className="container mx-auto px-4 py-8">
       <header className="text-center mb-12">
         <h1 className="text-6xl font-bold mb-2 logo-font bg-gradient-to-r from-purple-400 to-indigo-600 text-transparent bg-clip-text">AniSugg</h1>
         <p className="text-lg text-gray-400">Find your next favorite show</p>
       </header>
+
+      {/* Reset Button */}
+      <div className="flex justify-end mb-6">
+        <button
+          onClick={resetProfile}
+          className="px-4 py-2 bg-red-500 hover:bg-red-600 text-white rounded-lg shadow"
+        >
+          🔄 Reset Recommendations
+        </button>
+      </div>
 
       <RecommendationCarousel />
 
